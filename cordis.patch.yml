@@ -1,0 +1,16 @@
+# dsh-memory-recall: mount the host half — the memory store, the `memory` and
+# `session_search` tools, the per-chat memory snapshot, and the routes the
+# browser half reads. The Memory panel and the in-chat cards are mounted by the
+# `dsh.client` entry in package.json, not from here.
+#
+# `name` MUST be the package name: the loader imports this exact specifier.
+#
+# Config (all optional, set on this row):
+#   dir                     where USER.md and MEMORY.md live
+#                           (default ~/.dsh/dsh-memory-recall)
+#   limits: {memory, user}  character budgets (default 2200 / 1375, as Hermes)
+#   recall: false           drop session_search, keep memory
+#   askBeforeRecall: false  read earlier chats without asking first
+- insert:
+    - id: dsh-memory-recall
+      name: 'dsh-memory-recall'

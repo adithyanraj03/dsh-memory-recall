@@ -1,0 +1,156 @@
+// dsh-memory-recall — Hermes Agent-style memory for dsh.
+//
+//   memory          the model saves, corrects and forgets facts in USER.md and
+//                   MEMORY.md; every new chat starts with them in its prompt
+//   session_search  the model looks things up in earlier chats — after the
+//                   user allows it, through dsh's own approval prompt
+//
+// Data lives in ~/.dsh/dsh-memory-recall/. Nothing leaves the machine.
+//
+// Config (all optional, set on this plugin's row in cordis.patch.yml):
+//   dir                   where USER.md and MEMORY.md live
+//   limits: {memory, user} character budgets (default 2200 / 1375)
+//   recall: false         drop session_search, keep memory
+//   askBeforeRecall: false read earlier chats without asking (default: ask)
+
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { MemoryStore } from './store.js';
+import { SECTION_NAME, SECTION_ORDER, renderSection } from './snapshot.js';
+import { createMemoryTool } from './memory-tool.js';
+import { createRecall } from './recall.js';
+import { createRecallTool } from './recall-tool.js';
+import { createRecallLog, registerRoutes } from './routes.js';
+import { createChatIndex } from './chats.js';
+import { loadDefineTool } from './dsh-tools.js';
+
+export const name = 'dsh-memory-recall';
+
+/**
+ * Required services only. The session query, approval and system-prompt
+ * services are resolved per use with `get`, so a composition without one
+ * loses that feature rather than failing to load the plugin.
+ */
+export const inject = ['webServer', 'tools'];
+
+/** Look a service up without throwing when it is absent. */
+function service(ctx, id) {
+  try {
+    return ctx?.get?.(id);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A user's own chat — not a sub-agent the model started. */
+function isTopLevel(agent) {
+  const header = agent?.session?.header;
+  return !header || (!header.parentSession && header.origin !== 'subagent');
+}
+
+/**
+ * @param {object} ctx host plugin context
+ * @param {object} [config]
+ * @param {object} [deps] test hooks: defineTool, loadDefineTool
+ */
+export async function apply(ctx, config = {}, deps = {}) {
+  const dir = config.dir || join(homedir(), '.dsh', 'dsh-memory-recall');
+  const store = new MemoryStore({ dir, limits: config.limits });
+  await store.load();
+
+  const log = createRecallLog();
+  const grants = new Map();
+  // Every chat, grouped by workspace: the @ menu's list, and what a
+  // `workspace` given to session_search resolves against.
+  const chatIndex = createChatIndex({
+    getQuery: () => service(ctx, 'sessionQuery'),
+    getWorkspaces: () => service(ctx, 'workspaceRegistry'),
+  });
+  const cwdOf = async (sessionId) => {
+    try {
+      const rows = await service(ctx, 'sessionQuery')?.filterSessions?.([{ kind: 'id', values: [sessionId] }]);
+      return rows?.[0]?.header?.cwd ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const disposers = [];
+  // Whether the model actually got its tools. The prompt and the Memory
+  // panel both read this, so neither can promise a tool that is not there.
+  const tooling = { ok: false, error: null, tools: [] };
+
+  // ---- the model's tools ----------------------------------------------
+  if (ctx.tools?.register) {
+    try {
+      const defineTool = deps.defineTool ?? (await (deps.loadDefineTool ?? loadDefineTool)());
+      const tools = [createMemoryTool({ store, defineTool })];
+      if (config.recall !== false) {
+        const recall = createRecall({ getQuery: () => service(ctx, 'sessionQuery'), options: config.recallOptions });
+        tools.push(createRecallTool({
+          recall,
+          defineTool,
+          getApproval: () => service(ctx, 'approval'),
+          grants,
+          log,
+          askFirst: config.askBeforeRecall !== false,
+          resolveWorkspace: (name) => chatIndex.resolveWorkspace(name),
+          listWorkspaces: async () => (await chatIndex.list()).workspaces,
+        }));
+      }
+      for (const tool of tools) {
+        const dispose = ctx.tools.register(tool);
+        if (typeof dispose === 'function') disposers.push(dispose);
+        tooling.tools.push(tool.name);
+      }
+      tooling.ok = true;
+    } catch (error) {
+      tooling.error = String(error?.message ?? error);
+      ctx.logger?.warn?.(`[dsh-memory-recall] tools not registered: ${tooling.error}`);
+    }
+  } else {
+    tooling.error = 'this dsh has no tool registry';
+  }
+
+  // ---- each new chat: memory in its prompt, frozen for its lifetime ---
+  const briefed = new WeakSet();
+  ctx.on?.('agent/session-start', (payload) => {
+    const agent = payload?.agent;
+    const agentCtx = agent?.ctx;
+    if (!agentCtx || briefed.has(agentCtx) || !isTopLevel(agent)) return;
+    briefed.add(agentCtx);
+    try {
+      const prompt = service(agentCtx, 'systemPrompt');
+      if (typeof prompt?.section !== 'function') return;
+      // Read now, once: this text is what the chat keeps, so a save made later
+      // in it never rewrites its prompt (which would cost the cached prefix).
+      const text = renderSection(store.loadSync(), store.limits, { tools: tooling.ok });
+      const register = () => prompt.section({ name: SECTION_NAME, order: SECTION_ORDER, text });
+      if (typeof agentCtx.effect === 'function') agentCtx.effect(register, 'dsh-memory-recall: memory snapshot');
+      else register();
+    } catch (error) {
+      // Losing the snapshot costs this chat its memory, never the chat.
+      ctx.logger?.warn?.(`[dsh-memory-recall] no memory for this chat: ${error?.message ?? error}`);
+    }
+  });
+
+  // One "allow" lasts until the reply it was given in ends.
+  ctx.on?.('agent/status', (payload) => {
+    if (payload?.status === 'idle' && payload.agent?.id) grants.delete(payload.agent.id);
+  });
+
+  // ---- the browser half ----------------------------------------------
+  if (ctx.webServer?.register) {
+    disposers.push(registerRoutes(ctx.webServer, { store, log, chatIndex, cwdOf, tooling }));
+  } else {
+    ctx.logger?.warn?.('[dsh-memory-recall] webServer unavailable; the Memory panel and cards will be empty');
+  }
+
+  ctx.on?.('dispose', () => {
+    for (const dispose of disposers) {
+      try { dispose(); } catch { /* keep disposing the rest */ }
+    }
+  });
+  // cordis treats a returned value as an effect disposer; return nothing.
+}
+
+export default { apply, inject, name };
