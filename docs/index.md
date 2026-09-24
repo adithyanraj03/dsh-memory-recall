@@ -32,6 +32,7 @@ For ranked search of earlier chats, switch on dsh's full-text index — the [REA
 
 ![Saves in the chat: an added note and an updated profile entry](assets/saved-chip.png)
 
+- **The model sees it, visibly.** Memory reaches the model as a logged 🧠 Memory loaded row — at the start, after a change, and after a compaction — and a 🧠 button in the message box shows whether this chat has memory and when it last changed.
 - **Nothing is remembered behind your back.** Every save shows in the chat as a 🧠 note; click it for exactly what changed and how full memory is.
 - **Small on purpose.** 2,200 characters of notes and 1,375 of profile — Hermes's budgets — because memory is paid for in every chat. When it is full, the model merges and drops stale entries rather than growing.
 - **Guarded.** Every write the model makes is scanned for prompt-injection and exfiltration phrasing and hidden Unicode, using Hermes Agent's patterns, and refused with the reason.

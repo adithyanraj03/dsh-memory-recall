@@ -4,6 +4,7 @@
 //   POST /plugin-data/dsh-memory-recall/entry            → an edit made in the Memory panel
 //   GET  /plugin-data/dsh-memory-recall/recall?callId=…  → what one session_search call did
 //   GET  /plugin-data/dsh-memory-recall/chats?session=…  → every chat, grouped by workspace, for the @ menu
+//   GET  /plugin-data/dsh-memory-recall/briefing?session=… → whether that chat's prompt has memory, and which
 //
 // Edits from the panel are the user's own words, so they skip the injection
 // scan the model's writes go through — but not the budget: an over-full store
@@ -14,6 +15,48 @@ export const STATE_PATH = `${BASE}/state`;
 export const ENTRY_PATH = `${BASE}/entry`;
 export const RECALL_PATH = `${BASE}/recall`;
 export const CHATS_PATH = `${BASE}/chats`;
+export const BRIEFING_PATH = `${BASE}/briefing`;
+
+/** A short fingerprint of both stores, to tell whether memory changed since a chat was briefed. */
+export function digestOf(stores = {}) {
+  const text = JSON.stringify([stores.user ?? [], stores.memory ?? []]);
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) h = Math.imul(h ^ text.charCodeAt(i), 16777619) >>> 0;
+  return h.toString(36);
+}
+
+/**
+ * What each chat's prompt was given, by session id: when, why (a new chat,
+ * or one reopened after a restart), how many entries, and a fingerprint.
+ * Held in memory only — after a dsh restart a chat is briefed again when it
+ * is reopened, and recorded again then. Bounded, oldest out first.
+ */
+export function createBriefings(cap = 500, now = () => Date.now()) {
+  const byId = new Map();
+  return {
+    record(sessionId, stores, source) {
+      byId.delete(sessionId);
+      byId.set(sessionId, {
+        at: now(),
+        source: ['start', 'compaction', 'update', 'resume'].includes(source) ? source : 'start',
+        user: (stores.user ?? []).length,
+        memory: (stores.memory ?? []).length,
+        digest: digestOf(stores),
+      });
+      while (byId.size > cap) byId.delete(byId.keys().next().value);
+    },
+    get: (sessionId) => byId.get(sessionId) ?? null,
+  };
+}
+
+/** The chip's view of one chat: briefed or not, and whether memory moved on since. */
+export async function briefingOf(briefings, store, sessionId) {
+  const current = await store.load();
+  const now = { user: (current.user ?? []).length, memory: (current.memory ?? []).length };
+  const rec = sessionId ? briefings?.get(sessionId) : null;
+  if (!rec) return { briefed: false, now };
+  return { briefed: true, ...rec, changed: digestOf(current) !== rec.digest, now };
+}
 
 /** What the recall card needs from a result — titles and snippets, not whole chats. */
 export function summarize(result) {
@@ -94,7 +137,7 @@ export async function chatsFor(chatIndex, sessionId, cwdOf = async () => null) {
  * @param {object} p {store, log, chatIndex?, cwdOf?}
  * @returns {() => void} disposer
  */
-export function registerRoutes(webServer, { store, log, chatIndex, cwdOf, tooling }) {
+export function registerRoutes(webServer, { store, log, chatIndex, cwdOf, tooling, briefings = null }) {
   const off = [];
   off.push(webServer.register({
     kind: 'exact',
@@ -132,6 +175,15 @@ export function registerRoutes(webServer, { store, log, chatIndex, cwdOf, toolin
       if (!callId) return sendJson(res, 400, { error: 'missing callId' });
       const entry = log.get(callId);
       sendJson(res, entry ? 200 : 404, entry ?? { error: 'no record of that call (dsh may have restarted since)' });
+    },
+  }));
+  off.push(webServer.register({
+    kind: 'exact',
+    path: BRIEFING_PATH,
+    handler: async (req = {}, res) => {
+      if ((req.method || 'GET').toUpperCase() !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
+      const sessionId = new URL(req.url ?? '/', 'http://x').searchParams.get('session');
+      sendJson(res, 200, await briefingOf(briefings, store, sessionId));
     },
   }));
   if (chatIndex) {

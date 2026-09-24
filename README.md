@@ -8,9 +8,10 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin tha
 
 ![The Memory panel: the model's notes, with a budget bar and inline edit](assets/memory-panel.png)
 
-It does five things:
+It does six things:
 
-- **A `memory` tool** — the model keeps two short files: a **user profile** (who you are, how you like to work) and its **own notes** (environment facts, conventions, lessons). Every new chat starts with both in its prompt.
+- **A `memory` tool** — the model keeps two short files: a **user profile** (who you are, how you like to work) and its **own notes** (environment facts, conventions, lessons). Every chat gets both, as a context message you can see in the chat — at the start, again after a change or a compaction.
+- **A 🧠 button in the message box** — lit when this chat has memory, dim when it has none, amber when the memory changed since; click it to see what this chat is running on.
 - **A `session_search` tool** — the model reads your earlier chats to answer *"what did we decide last time?"*. dsh's own approval prompt asks you first, saying what it wants to look for.
 - **A 🧠 Saved to memory note in the chat** — every save shows what changed and how full memory is, so nothing is remembered behind your back.
 - **A sidebar 🧠 Memory panel** — everything kept, in two tabs, with edit, delete, add and search.
@@ -61,7 +62,7 @@ Just talk. The model saves what will matter later — that you use PowerShell, t
 
 You can also ask directly: *"remember that I prefer short answers"*, *"forget that I use npm"*.
 
-Memory is pasted into each new chat's prompt once, when the chat starts, and is **fixed for the life of that chat** — rewriting the prompt mid-chat would throw away dsh's cached prompt prefix. A save made mid-chat is on disk at once and reaches the prompt from the **next** new chat. The model is told this, so it does not save twice.
+Memory reaches the model as a context message — logged in the chat as 🧠 **Memory loaded** — before its first answer, and again after anything changes or the conversation is compacted, so a save made mid-chat is used in that same chat from the next step. The system prompt keeps only the short how-to, which never changes, so dsh's prompt cache holds.
 
 ### Looking back through earlier chats
 
@@ -78,11 +79,12 @@ It returns the chats' actual messages — nothing summarised, nothing invented �
 - **Notes** and **Profile** tabs, each with a ring and a bar showing how full it is.
 - **Edit** or **delete** any entry in place (hover it), with an inline confirm for delete.
 - **Add** an entry yourself, and **search** once a tab holds a few.
+- **⚙ Display settings** — turn the 🧠 button in the message box and the chats and workspaces in `@` on or off, per browser.
 - With the sidebar collapsed, it becomes a single icon, like Settings.
 
 ![The Profile tab in the light theme](assets/memory-panel-light.png)
 
-Edits you make here are your own words, so they are not scanned (see [Safety](#safety)), but they still respect the budget. Hand edits to the files show in the panel at once and in the prompt from the next new chat.
+Edits you make here are your own words, so they are not scanned (see [Safety](#safety)), but they still respect the budget. Hand edits to the files show in the panel at once and in open chats from their next step.
 
 ### Chats and workspaces in the @ menu
 
@@ -105,9 +107,12 @@ Every chat gets a readable name — its title, or the start of its first message
 
 If dsh runs in `danger-full-access` mode its approval policy is `never`, which **rejects** every approval request without prompting — so recall is refused there. Set `askBeforeRecall: false` if you want recall without asking in that mode.
 
-## What goes into the prompt
+## What the model gets
 
-Each new chat gets one prompt section: a short note on how memory works, then the two stores, rendered as Hermes renders them:
+Two parts, so dsh's prompt cache holds:
+
+1. **The how-to** — a short, unchanging system-prompt note on how memory works. It is the only memory in the prompt prefix, so it never invalidates the cache.
+2. **The memory itself** — a context message, logged in the chat as 🧠 **Memory loaded**, with the two stores rendered as Hermes renders them:
 
 ```
 ══════════════════════════════════════════════
@@ -120,7 +125,7 @@ Prefers short answers with the command first, explanation after.
 
 The budgets are small on purpose — **2,200 characters of notes and 1,375 of profile**, Hermes's defaults, together roughly 900 tokens — because they are paid in every chat. When a store is full, a save that would overflow it is refused whole, never cut; the model is shown the entries and consolidates in one batch that merges or drops stale entries and adds the new one, checked against the final size. Raise the budgets with `limits` (below) if you would rather pay more per chat.
 
-Sub-agent sessions do not get the section; they are the model's own workers.
+Sub-agent sessions do not get the message; they are the model's own workers.
 
 ## Configuration
 
@@ -155,8 +160,8 @@ Other guards:
 
 ## How it works
 
-- **Host side** (`src/index.js`): registers the `memory` and `session_search` tools, adds the memory section to each new top-level chat's system prompt on `agent/session-start`, and serves the panel's routes under `/plugin-data/dsh-memory-recall/`. Recall goes through dsh's `sessionQuery` service and its `approval` service; nothing talks to the network.
-- **Client side** (`lib/client.js`, plain JavaScript, no build step): the in-chat chip and recall card replace dsh's own rows for those two tools through the `tool.call.toolview` slot; the panel mounts into `sidebar.footer.action`; the `@` rows are an `inputTriggers` source.
+- **Host side** (`src/index.js`, `src/inject.js`): registers the `memory` and `session_search` tools, keeps a short how-to in each new top-level chat's system prompt on `agent/session-start`, and before every model step (`agent/pre-step`) appends the current memory to the step's messages as a logged context message when the chat does not already see it — at the start, after a change, and after a compaction. It serves the panel's routes under `/plugin-data/dsh-memory-recall/`. Recall goes through dsh's `sessionQuery` service and its `approval` service; nothing talks to the network.
+- **Client side** (`lib/client.js`, plain JavaScript, no build step): the in-chat chip and recall card replace dsh's own rows for those two tools through the `tool.call.toolview` slot; the 🧠 **Memory loaded / reloaded / updated** row is a `conversation.chat.node` that shadows the plugin's own context message at priority −10 and delegates every other row; the 🧠 button mounts into `conversation.input.right`; the panel mounts into `sidebar.footer.action`; the `@` rows are an `inputTriggers` source.
 - **Files**:
 
   ```

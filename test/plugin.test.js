@@ -56,26 +56,6 @@ test('registers memory and session_search; recall: false keeps only memory', asy
   assert.deepEqual((await boot({ recall: false })).tools.map((t) => t.name), ['memory']);
 });
 
-test('each new chat gets memory in its prompt, frozen at its start', async () => {
-  const { tools, handlers } = await boot();
-  const memory = tools.find((t) => t.name === 'memory');
-  await memory.execute({ target: 'user', action: 'add', content: 'Name is Adithya.' });
-
-  const first = agentWith('chat-1');
-  handlers['agent/session-start'][0]({ agent: first.agent });
-  assert.equal(first.sections.length, 1);
-  assert.equal(first.sections[0].name, 'dsh-memory-recall:memory');
-  assert.match(first.sections[0].text, /USER PROFILE \(who the user is\).*\nName is Adithya\./s);
-
-  // A save during chat 1 does not touch chat 1's prompt …
-  await memory.execute({ target: 'memory', action: 'add', content: 'Uses pnpm.' });
-  assert.doesNotMatch(first.sections[0].text, /Uses pnpm/);
-  // … it reaches the next chat.
-  const second = agentWith('chat-2');
-  handlers['agent/session-start'][0]({ agent: second.agent });
-  assert.match(second.sections[0].text, /MEMORY \(your personal notes\).*\nUses pnpm\./s);
-});
-
 test('a chat is briefed once; sub-agents are not briefed', async () => {
   const { handlers } = await boot();
   const start = handlers['agent/session-start'][0];
@@ -86,14 +66,6 @@ test('a chat is briefed once; sub-agents are not briefed', async () => {
   const sub = agentWith('sub', { parentSession: 'c', origin: 'subagent' });
   start({ agent: sub.agent });
   assert.equal(sub.sections.length, 0);
-});
-
-test('an empty memory still tells the model how memory works', async () => {
-  const { handlers } = await boot();
-  const chat = agentWith('c');
-  handlers['agent/session-start'][0]({ agent: chat.agent });
-  assert.match(chat.sections[0].text, /# Memory/);
-  assert.match(chat.sections[0].text, /Nothing is saved yet/);
 });
 
 test('routes: the panel reads both stores, edits them, and bad edits are refused', async () => {
@@ -139,4 +111,125 @@ test('the chat going idle ends any recall grant', async () => {
 test('boots without a web server or tool registry, losing only those parts', async () => {
   const ctx = { logger: { warn() {} }, on() {}, get: () => undefined };
   await assert.doesNotReject(apply(ctx, { dir: await mkdtemp(join(tmpdir(), 'mem-bare-')) }, { defineTool: passThrough }));
+});
+
+/* ---- briefings: which chat's prompt got memory ---------------------------------- */
+
+/* ---- memory as a logged context message ----------------------------------------- */
+
+/** A stand-in for agent.session: logged events, and the surface the model can see. */
+function fakeSession(header = {}) {
+  const events = [];
+  return {
+    header,
+    events,
+    surface: { nodes: [] },
+    get seq() { return events.length; },
+    eventAt(i) { return events[i]; },
+    /** The step's messages are logged and visible, as dsh does after a step. */
+    commit(messages) {
+      for (const m of messages) {
+        const seq = events.length;
+        events.push({ seq, type: 'user/message', data: { id: m.id, source: m.source, content: m.content } });
+        this.surface.nodes.push(seq);
+      }
+    },
+    /** Compaction: everything so far drops off the visible surface. */
+    compact() { this.surface.nodes = []; },
+  };
+}
+const userTurn = (text) => ({ id: 'u-' + text, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } });
+
+async function step(handlers, agent, text) {
+  const decision = await handlers['agent/pre-step'][0]({ agent }, async () => ({ kind: 'continue', messages: [userTurn(text)] }));
+  agent.session.commit(decision.messages);
+  return decision.messages.filter((m) => m.source?.kind === 'plugin' && m.source.plugin === 'memory');
+}
+
+test('the system prompt gets the guidance only — the same text whatever memory holds', async () => {
+  const { tools, handlers } = await boot();
+  const a = agentWith('a');
+  handlers['agent/session-start'][0]({ agent: a.agent });
+  await tools.find((t) => t.name === 'memory').execute({ target: 'user', action: 'add', content: 'Prefers short answers.' });
+  const b = agentWith('b');
+  handlers['agent/session-start'][0]({ agent: b.agent });
+  assert.equal(a.sections[0].text, b.sections[0].text, 'unchanged by a save: the cached prefix holds');
+  assert.doesNotMatch(b.sections[0].text, /Prefers short answers/, 'entries are not in the system prompt');
+  assert.match(b.sections[0].text, /Use it without being asked/);
+  assert.match(b.sections[0].text, /"memory" context message/);
+});
+
+test('memory arrives before the first answer as a context message dsh logs and labels', async () => {
+  const { tools, handlers } = await boot();
+  await tools.find((t) => t.name === 'memory').execute({ target: 'user', action: 'add', content: 'Prefers short answers.' });
+  await tools.find((t) => t.name === 'memory').execute({ target: 'memory', action: 'add', content: 'Uses pnpm.' });
+  const agent = { id: 'c1', session: fakeSession() };
+  const [msg] = await step(handlers, agent, 'hi');
+  assert.ok(msg, 'injected on the first step');
+  assert.equal(msg.role, 'user');
+  assert.deepEqual({ kind: msg.source.kind, plugin: msg.source.plugin, form: msg.source.form }, { kind: 'plugin', plugin: 'memory', form: 'notice' });
+  assert.equal(msg.source.summary, '1 profile · 1 note', 'the row reads "Context injection · memory · 1 profile · 1 note"');
+  assert.match(msg.content[0].text, /^<system-reminder>\nYour persistent memory, carried over from earlier chats\./);
+  assert.match(msg.content[0].text, /Prefers short answers\./);
+  assert.match(msg.content[0].text, /Uses pnpm\./);
+  assert.match(msg.content[0].text, /Use it without being asked/);
+});
+
+test('not sent again while the chat can see it; sent again after compaction and after a change', async () => {
+  const { tools, handlers } = await boot();
+  const memory = tools.find((t) => t.name === 'memory');
+  await memory.execute({ target: 'memory', action: 'add', content: 'Uses pnpm.' });
+  const agent = { id: 'c2', session: fakeSession() };
+  assert.equal((await step(handlers, agent, 'one')).length, 1, 'start');
+  assert.equal((await step(handlers, agent, 'two')).length, 0, 'still visible, unchanged: nothing');
+
+  agent.session.compact();
+  const [again] = await step(handlers, agent, 'three');
+  assert.ok(again, 'compacted away: sent again');
+  assert.match(again.source.summary, /^after compaction · /);
+  assert.match(again.content[0].text, /conversation was compacted/);
+  assert.equal((await step(handlers, agent, 'four')).length, 0);
+
+  await memory.execute({ target: 'memory', action: 'add', content: 'Deploys from release.' });
+  const [updated] = await step(handlers, agent, 'five');
+  assert.ok(updated, 'changed: sent again');
+  assert.equal(updated.source.summary, 'updated · 0 profile · 2 notes');
+  assert.match(updated.content[0].text, /replaces any earlier memory message/);
+  assert.match(updated.content[0].text, /Deploys from release\./);
+});
+
+test('an empty memory still arrives, saying nothing is saved; sub-agents get none; a rejected step is left alone', async () => {
+  const { handlers } = await boot();
+  const [msg] = await step(handlers, { id: 'c3', session: fakeSession() }, 'hi');
+  assert.match(msg.content[0].text, /Nothing is saved yet/);
+  assert.equal(msg.source.summary, '0 profile · 0 notes');
+  const sub = { id: 's', session: fakeSession({ parentSession: 'c3', origin: 'subagent' }) };
+  assert.equal((await step(handlers, sub, 'hi')).length, 0);
+  const rejected = await handlers['agent/pre-step'][0]({ agent: { id: 'c4', session: fakeSession() } }, async () => ({ kind: 'reject' }));
+  assert.deepEqual(rejected, { kind: 'reject' });
+});
+
+test('briefing route: records each delivery with its reason, and whether memory moved on since', async () => {
+  const { tools, handlers, routes } = await boot();
+  const memory = tools.find((t) => t.name === 'memory');
+  await memory.execute({ target: 'user', action: 'add', content: 'Prefers short answers.' });
+  const route = [...routes.values()].find((r) => r.path.endsWith('/briefing'));
+  let res = await call(route, { url: route.path + '?session=c5' });
+  assert.equal(res.body.briefed, false);
+  assert.deepEqual(res.body.now, { user: 1, memory: 0 });
+
+  const agent = { id: 'c5', session: fakeSession() };
+  await step(handlers, agent, 'hi');
+  res = await call(route, { url: route.path + '?session=c5' });
+  assert.equal(res.body.briefed, true);
+  assert.equal(res.body.source, 'start');
+  assert.equal(res.body.changed, false);
+
+  await memory.execute({ target: 'memory', action: 'add', content: 'Uses pnpm.' });
+  res = await call(route, { url: route.path + '?session=c5' });
+  assert.equal(res.body.changed, true, 'saved since, not yet delivered');
+  await step(handlers, agent, 'next');
+  res = await call(route, { url: route.path + '?session=c5' });
+  assert.equal(res.body.source, 'update');
+  assert.equal(res.body.changed, false, 'delivered on the next step');
 });

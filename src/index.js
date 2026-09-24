@@ -20,9 +20,11 @@ import { SECTION_NAME, SECTION_ORDER, renderSection } from './snapshot.js';
 import { createMemoryTool } from './memory-tool.js';
 import { createRecall } from './recall.js';
 import { createRecallTool } from './recall-tool.js';
-import { createRecallLog, registerRoutes } from './routes.js';
+import { createBriefings, createRecallLog, registerRoutes } from './routes.js';
 import { createChatIndex } from './chats.js';
 import { loadDefineTool } from './dsh-tools.js';
+import { injectionReason, memoryMessage, pendingMemory } from './inject.js';
+import { digestOf } from './routes.js';
 
 export const name = 'dsh-memory-recall';
 
@@ -113,6 +115,8 @@ export async function apply(ctx, config = {}, deps = {}) {
 
   // ---- each new chat: memory in its prompt, frozen for its lifetime ---
   const briefed = new WeakSet();
+  // sessionId -> what that chat's prompt was given, for the composer chip.
+  const briefings = createBriefings();
   ctx.on?.('agent/session-start', (payload) => {
     const agent = payload?.agent;
     const agentCtx = agent?.ctx;
@@ -123,13 +127,38 @@ export async function apply(ctx, config = {}, deps = {}) {
       if (typeof prompt?.section !== 'function') return;
       // Read now, once: this text is what the chat keeps, so a save made later
       // in it never rewrites its prompt (which would cost the cached prefix).
-      const text = renderSection(store.loadSync(), store.limits, { tools: tooling.ok });
+      // The guidance only: fixed text, so the cached prompt prefix holds.
+      const text = renderSection(null, store.limits, { tools: tooling.ok });
       const register = () => prompt.section({ name: SECTION_NAME, order: SECTION_ORDER, text });
       if (typeof agentCtx.effect === 'function') agentCtx.effect(register, 'dsh-memory-recall: memory snapshot');
       else register();
     } catch (error) {
       // Losing the snapshot costs this chat its memory, never the chat.
       ctx.logger?.warn?.(`[dsh-memory-recall] no memory for this chat: ${error?.message ?? error}`);
+    }
+  });
+
+  // ---- the memory itself: a logged context message, whenever the chat
+  // cannot see the current version (start, after compaction, after a change).
+  ctx.on?.('agent/pre-step', async (payload, next) => {
+    const decision = await next();
+    const agent = payload?.agent;
+    if (!decision || decision.kind === 'reject' || !agent?.session || !isTopLevel(agent)) return decision;
+    try {
+      const stores = await store.load();
+      const reason = injectionReason(agent.session, digestOf(stores));
+      const pending = pendingMemory(decision.messages);
+      if (!reason) {
+        return pending ? { ...decision, messages: decision.messages.filter((m) => m !== pending) } : decision;
+      }
+      const message = memoryMessage(stores, store.limits, reason);
+      if (agent.id) briefings.record(agent.id, stores, reason);
+      const messages = decision.messages ?? [];
+      return { ...decision, messages: pending ? messages.map((m) => (m === pending ? message : m)) : [...messages, message] };
+    } catch (error) {
+      // Memory that cannot be read costs this step its memory, never the step.
+      ctx.logger?.warn?.(`[dsh-memory-recall] memory not delivered: ${error?.message ?? error}`);
+      return decision;
     }
   });
 
@@ -140,7 +169,7 @@ export async function apply(ctx, config = {}, deps = {}) {
 
   // ---- the browser half ----------------------------------------------
   if (ctx.webServer?.register) {
-    disposers.push(registerRoutes(ctx.webServer, { store, log, chatIndex, cwdOf, tooling }));
+    disposers.push(registerRoutes(ctx.webServer, { store, log, chatIndex, cwdOf, tooling, briefings }));
   } else {
     ctx.logger?.warn?.('[dsh-memory-recall] webServer unavailable; the Memory panel and cards will be empty');
   }

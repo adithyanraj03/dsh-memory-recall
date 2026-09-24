@@ -18,6 +18,8 @@ export const TEXT_OUTPUT = {
 };
 
 const ACTIONS = ['add', 'replace', 'remove'];
+/** `read` is a single action only: it changes nothing, so it never belongs in a batch. */
+const SINGLE_ACTIONS = [...ACTIONS, 'read'];
 
 export const MEMORY_DESCRIPTION = [
   'Save durable facts to persistent memory that carries across chats. Memory is placed in the system prompt of every new chat,',
@@ -27,6 +29,9 @@ export const MEMORY_DESCRIPTION = [
   'The batch is applied all-or-nothing and the character budget is checked only on the FINAL result, so one call can remove',
   'or shorten stale entries to make room AND add new ones. For a single change, use action/content/old_text instead.',
   'The result confirms the update is complete; do not repeat it.',
+  '',
+  "READ: action 'read' (no target needed) returns the current memory — both the user profile and your notes. You rarely need it:",
+  'memory already arrives as a context message at the start, after a change and after compaction.',
   '',
   "TARGETS: 'user' = who the user is (name, role, preferences, working style). 'memory' = your own notes",
   '(environment facts, conventions, tool quirks, lessons that apply to every task).',
@@ -75,6 +80,24 @@ export function describeResult(result) {
 }
 
 /**
+ * The model-facing text for a read: a fixed first line the chat card reads
+ * ("Read memory: N profile entries, M notes"), then the entries themselves.
+ */
+export function describeRead(stores, target) {
+  const want = target === 'user' || target === 'memory' ? [target] : ['user', 'memory'];
+  const user = stores.user ?? [];
+  const memory = stores.memory ?? [];
+  const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+  const head = `Read memory: ${n(user.length, 'profile entry', 'profile entries')}, ${n(memory.length, 'note', 'notes')} (current version).`;
+  const block = (t) => {
+    const entries = t === 'user' ? user : memory;
+    const title = t === 'user' ? 'USER PROFILE' : 'NOTES';
+    return entries.length ? `${title}:\n${entries.map((e, i) => `${i + 1}. ${e}`).join('\n')}` : `${title}: (empty)`;
+  };
+  return [head, ...want.map(block), 'Apply these for the rest of this chat without being asked.'].join('\n\n');
+}
+
+/**
  * @param {object} p
  * @param {import('./store.js').MemoryStore} p.store
  * @param {Function} p.defineTool  from @deepseek-ai/dsh-tools
@@ -85,12 +108,12 @@ export function createMemoryTool({ store, defineTool }) {
     description: MEMORY_DESCRIPTION,
     parameters: {
       target: {
-        type: 'string', enum: ['memory', 'user'], required: true,
-        description: "'user' for the user profile, 'memory' for your own notes.",
+        type: 'string', enum: ['memory', 'user'],
+        description: "'user' for the user profile, 'memory' for your own notes. Needed for changes; omit for read to get both.",
       },
       action: {
-        type: 'string', enum: ACTIONS,
-        description: 'A single change. Omit when using operations.',
+        type: 'string', enum: SINGLE_ACTIONS,
+        description: "A single change, or 'read' to load the current memory. Omit when using operations.",
       },
       content: {
         type: 'string',
@@ -115,13 +138,21 @@ export function createMemoryTool({ store, defineTool }) {
       },
     },
     output: TEXT_OUTPUT,
-    execute: async (args) => ({ text: describeResult(await runMemory(store, args)) }),
+    execute: async (args) => {
+      if (args?.action === 'read') return { text: describeRead(await store.load(), args.target) };
+      return { text: describeResult(await runMemory(store, args)) };
+    },
   });
 }
 
 /** Dispatch one call to the store. Kept apart from the tool so it can be tested alone. */
 export async function runMemory(store, args = {}) {
-  const target = args.target ?? 'memory';
+  // `target` is optional in the schema only because a read needs none; a
+  // change without one is refused rather than guessed.
+  if (args.target === undefined || args.target === null) {
+    return store.fail('memory', "give a target — 'user' for the user profile or 'memory' for your notes");
+  }
+  const target = args.target;
   if (!Object.hasOwn(TARGETS, target)) return store.fail(target, `unknown target '${target}' — use 'memory' or 'user'`);
   // Some providers send JSON null for every omitted optional field.
   const operations = Array.isArray(args.operations) && args.operations.length ? args.operations : null;

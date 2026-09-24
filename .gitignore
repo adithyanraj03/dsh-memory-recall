@@ -18,6 +18,7 @@ Thumbs.db
 # Local publishing notes — kept out of the public repo
 PUBLISHING.md
 MARKETPLACE.md
+AUDIT-*.md
 
 # Scratch release notes (per-release, never committed)
 .relnotes.md

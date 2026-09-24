@@ -14,11 +14,13 @@ const store = async (limits) => new MemoryStore({ dir: await mkdtemp(join(tmpdir
 
 /* ---- memory ---------------------------------------------------------------- */
 
-test('memory: the schema offers both targets, the three actions and a batch', async () => {
+test('memory: the schema offers both targets, the three changes plus read, and a batch', async () => {
   const tool = createMemoryTool({ store: await store(), defineTool: passThrough });
   assert.equal(tool.name, 'memory');
   assert.deepEqual(tool.parameters.target.enum, ['memory', 'user']);
-  assert.deepEqual(tool.parameters.action.enum, ['add', 'replace', 'remove']);
+  assert.deepEqual(tool.parameters.action.enum, ['add', 'replace', 'remove', 'read']);
+  assert.deepEqual(tool.parameters.operations.items.properties.action.enum, ['add', 'replace', 'remove'], 'read is never part of a batch');
+  assert.equal(tool.parameters.target.required, undefined, 'a read needs no target');
   assert.equal(tool.parameters.operations.items.properties.action.required, true);
   assert.match(tool.description, /ONE call/);
 });
@@ -170,3 +172,38 @@ test('recall: answers are cut to fit rather than flooding the context', () => {
   assert.ok(text.length <= 2000);
   assert.match(text, /cut to fit/);
 });
+
+test('memory read: returns both stores, current, with the first line the card reads', async () => {
+  const s = await store();
+  const tool = createMemoryTool({ store: s, defineTool: passThrough });
+  await tool.execute({ target: 'user', action: 'add', content: 'Prefers short answers.' });
+  await tool.execute({ target: 'memory', action: 'add', content: 'Uses pnpm.' });
+  await tool.execute({ target: 'memory', action: 'add', content: 'Staging deploys from release.' });
+  const text = (await tool.execute({ action: 'read' })).text;
+  assert.match(text, /^Read memory: 1 profile entry, 2 notes \(current version\)\./);
+  assert.match(text, /USER PROFILE:\n1\. Prefers short answers\./);
+  assert.match(text, /NOTES:\n1\. Uses pnpm\.\n2\. Staging deploys from release\./);
+  assert.match(text, /without being asked/);
+  const onlyUser = (await tool.execute({ action: 'read', target: 'user' })).text;
+  assert.match(onlyUser, /USER PROFILE/);
+  assert.doesNotMatch(onlyUser, /NOTES:/);
+});
+
+test('memory read: changes nothing', async () => {
+  const s = await store();
+  const tool = createMemoryTool({ store: s, defineTool: passThrough });
+  await tool.execute({ target: 'memory', action: 'add', content: 'x fact' });
+  const before = JSON.stringify(await s.load());
+  await tool.execute({ action: 'read' });
+  assert.equal(JSON.stringify(await s.load()), before);
+});
+
+test('memory: a change without a target is refused, not guessed', async () => {
+  const s = await store();
+  const tool = createMemoryTool({ store: s, defineTool: passThrough });
+  const text = (await tool.execute({ action: 'add', content: 'orphan' })).text;
+  assert.match(text, /^Not saved/);
+  assert.match(text, /give a target/);
+  assert.deepEqual((await s.load()).memory, []);
+});
+
