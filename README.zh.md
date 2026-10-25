@@ -1,3 +1,10 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
+  <img alt="dsh-memory-recall" src="assets/banner-light.png" width="1012">
+</picture>
+
+<br>
+
 # dsh-memory-recall
 
 [English](README.md) | 中文
