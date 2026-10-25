@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- dsh-memory-recall icon source. Rasterised to assets/icon.png (512x512)
+       with: rsvg-convert -w 512 -h 512 -o assets/icon.png assets/icon.svg
+       The solid brain the plugin draws in dsh (Phosphor "brain" fill, MIT —
+       lib/client.js SolidBrainIcon), filled with the Saved-to-memory chip's
+       own gradient (dmr-from, dmr-mid, dmr-to) and its violet glow (dmr-glow)
+       on the chip's dark tile, so it reads at 36px (dsh's plugin list) and
+       96px (the market tile) on light and dark. -->
+  <defs>
+    <linearGradient id="brain" x1="0" y1="0" x2="1" y2="0.28">
+      <stop offset="0%" stop-color="#CE9A4B"/>
+      <stop offset="48%" stop-color="#C08089"/>
+      <stop offset="100%" stop-color="#A59ADC"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#9E94D5" stop-opacity="0.22"/>
+      <stop offset="70%" stop-color="#9E94D5" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#9E94D5" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#1B1B1D"/>
+  <circle cx="256" cy="256" r="230" fill="url(#glow)"/>
+  <g transform="translate(86 86) scale(1.328)" fill="url(#brain)">
+    <path d="M248,124a56.11,56.11,0,0,0-32-50.61V72a48,48,0,0,0-88-26.49A48,48,0,0,0,40,72v1.39a56,56,0,0,0,0,101.22V176a48,48,0,0,0,88,26.49A48,48,0,0,0,216,176v-1.39A56.09,56.09,0,0,0,248,124ZM88,208a32,32,0,0,1-31.81-28.56A55.87,55.87,0,0,0,64,180h8a8,8,0,0,0,0-16H64A40,40,0,0,1,51.2,86.1a8,8,0,0,0,5.6-6.83A32,32,0,0,1,120,72v75.36A47.79,47.79,0,0,0,88,136a8,8,0,0,0,0,16,32,32,0,0,1,32,32A24,24,0,0,1,88,208Zm104-44h-8a8,8,0,0,0,0,16h8a55.87,55.87,0,0,0,7.81-.56A32,32,0,1,1,136,184a32,32,0,0,1,32-32,8,8,0,0,0,0-16,47.79,47.79,0,0,0-32,11.36V72a32,32,0,0,1,63.2-7.27,8,8,0,0,0,5.6,6.83A40,40,0,0,1,192,164Z"/>
+  </g>
+</svg>
