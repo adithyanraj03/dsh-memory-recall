@@ -394,6 +394,16 @@ function contextNode(entries) {
   return exports.makeContextNode(ctx);
 }
 const memoryNode = (reason) => ({ node: { data: { content: [{ type: 'text', text: MEMORY_TEXT }], source: { kind: 'plugin', plugin: 'memory', form: 'notice', reason } } }, t: (k) => k });
+const memoryNodeV4 = (reason) => ({ node: { data: { content: [{ type: 'text', text: MEMORY_TEXT }], source: { kind: 'plugin:memory', form: 'notice', reason } } }, t: (k) => k });
+
+test('context row: the v4 plugin:memory kind gets the same card', () => {
+  const Node = contextNode([]);
+  const flat = (tree) => JSON.stringify(tree);
+  const row = Node(memoryNodeV4('start'));
+  const expanded = typeof row.type === 'function' ? row.type(row.props) : row;
+  assert.equal(expanded.props['data-plugin'], 'dsh-memory-recall-context');
+  assert.match(flat(expanded), /Memory loaded/);
+});
 
 test('context row: memory gets its own card — brain, title by reason, counts', () => {
   const Node = contextNode([]);

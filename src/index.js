@@ -183,7 +183,7 @@ export async function apply(ctx, config = {}, deps = {}) {
       if (!reason) {
         return pending ? { ...decision, messages: decision.messages.filter((m) => m !== pending) } : decision;
       }
-      const message = memoryMessage(stores, store.limits, reason);
+      const message = memoryMessage(stores, store.limits, reason, agent.session?.header?.version ?? 0);
       if (agent.id) briefings.record(agent.id, stores, reason);
       const messages = decision.messages ?? [];
       return { ...decision, messages: pending ? messages.map((m) => (m === pending ? message : m)) : [...messages, message] };

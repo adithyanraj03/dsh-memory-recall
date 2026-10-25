@@ -26,9 +26,15 @@ export function countsText(stores) {
   return `${(stores.user ?? []).length} profile · ${plural((stores.memory ?? []).length, 'note', 'notes')}`;
 }
 
-/** Is this logged message one of ours? */
+/**
+ * Is this logged message one of ours? Both shapes count: the v3 wrapper
+ * (`kind: 'plugin'` + a `plugin` field) that dsh 0.1.x logs, and the v4
+ * producer kind `plugin:memory` — which is also what dsh's own v3→v4
+ * converter left in chats that started on the wrapper.
+ */
 function isMemorySource(source) {
-  return source?.kind === 'plugin' && source?.plugin === INJECT_LABEL;
+  return source?.kind === `plugin:${INJECT_LABEL}`
+    || (source?.kind === 'plugin' && source?.plugin === INJECT_LABEL);
 }
 
 /**
@@ -62,11 +68,16 @@ const LEAD = {
 
 /**
  * The context message: what the model reads, and the source dsh logs and labels.
+ * Format v4 (dsh 0.2.x) refuses `kind: 'plugin'` — every source must carry a
+ * producer-owned kind — so a v4 chat gets `kind: 'plugin:memory'`, exactly what
+ * dsh's v3→v4 converter produced for chats that began on the old wrapper.
  * @param {{user: string[], memory: string[]}} stores
  * @param {{user: number, memory: number}} limits
  * @param {'start'|'compaction'|'update'} reason
+ * @param {number} version  the chat's session format version (header.version)
+ * @param {string} [id]
  */
-export function memoryMessage(stores, limits, reason, id = randomUUID()) {
+export function memoryMessage(stores, limits, reason, version = 0, id = randomUUID()) {
   const blocks = [renderBlock('user', stores.user ?? [], limits.user), renderBlock('memory', stores.memory ?? [], limits.memory)].filter(Boolean);
   const text = [
     '<system-reminder>',
@@ -78,10 +89,14 @@ export function memoryMessage(stores, limits, reason, id = randomUUID()) {
     '</system-reminder>',
   ].join('\n');
   const summary = (reason === 'compaction' ? 'after compaction · ' : reason === 'update' ? 'updated · ' : '') + countsText(stores);
+  const fields = { form: 'notice', summary, reason, digest: digestOf(stores) };
+  const source = version >= 4
+    ? { kind: `plugin:${INJECT_LABEL}`, ...fields }
+    : { kind: 'plugin', plugin: INJECT_LABEL, ...fields };
   return Object.freeze({
     id,
     role: 'user',
     content: Object.freeze([Object.freeze({ type: 'text', text })]),
-    source: Object.freeze({ kind: 'plugin', plugin: INJECT_LABEL, form: 'notice', summary, reason, digest: digestOf(stores) }),
+    source: Object.freeze(source),
   });
 }

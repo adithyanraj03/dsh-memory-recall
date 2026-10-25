@@ -211,7 +211,7 @@ const userTurn = (text) => ({ id: 'u-' + text, role: 'user', content: [{ type: '
 async function step(handlers, agent, text) {
   const decision = await handlers['agent/pre-step'][0]({ agent }, async () => ({ kind: 'continue', messages: [userTurn(text)] }));
   agent.session.commit(decision.messages);
-  return decision.messages.filter((m) => m.source?.kind === 'plugin' && m.source.plugin === 'memory');
+  return decision.messages.filter((m) => m.source?.kind === 'plugin:memory' || (m.source?.kind === 'plugin' && m.source.plugin === 'memory'));
 }
 
 test('the system prompt gets the guidance only — the same text whatever memory holds', async () => {
@@ -264,6 +264,36 @@ test('not sent again while the chat can see it; sent again after compaction and 
   assert.equal(updated.source.summary, 'updated · 0 profile · 2 notes');
   assert.match(updated.content[0].text, /replaces any earlier memory message/);
   assert.match(updated.content[0].text, /Deploys from release\./);
+});
+
+test('a format-v4 chat (dsh 0.2.x) gets the producer-owned plugin:memory kind', async () => {
+  const { tools, handlers } = await boot();
+  await tools.find((t) => t.name === 'memory').execute({ target: 'memory', action: 'add', content: 'Uses pnpm.' });
+  const agent = { id: 'v4', session: fakeSession({ version: 4 }) };
+  const [msg] = await step(handlers, agent, 'hi');
+  assert.ok(msg, 'injected on the first step');
+  assert.equal(msg.source.kind, 'plugin:memory', 'v4 refuses kind: plugin');
+  assert.equal('plugin' in msg.source, false, 'the v3 plugin field is dropped, as the converter does');
+  assert.equal(msg.source.form, 'notice');
+  assert.equal(msg.source.summary, '0 profile · 1 note');
+});
+
+test('a format-v3 chat keeps the old plugin wrapper for dsh 0.1.x', async () => {
+  const { handlers } = await boot();
+  const agent = { id: 'v3', session: fakeSession({ version: 3 }) };
+  const [msg] = await step(handlers, agent, 'hi');
+  assert.equal(msg.source.kind, 'plugin');
+  assert.equal(msg.source.plugin, 'memory');
+});
+
+test('a converted plugin:memory message already in the chat is not injected again', async () => {
+  const { tools, handlers } = await boot();
+  await tools.find((t) => t.name === 'memory').execute({ target: 'memory', action: 'add', content: 'Uses pnpm.' });
+  const agent = { id: 'conv', session: fakeSession({ version: 4 }) };
+  // First delivery lands as plugin:memory; the chat can see it.
+  assert.equal((await step(handlers, agent, 'one')).length, 1, 'start');
+  // A second step must recognise its own plugin:memory message and stay quiet.
+  assert.equal((await step(handlers, agent, 'two')).length, 0, 'the v4 message is detected, not re-injected');
 });
 
 test('an empty memory still arrives, saying nothing is saved; sub-agents get none; a rejected step is left alone', async () => {

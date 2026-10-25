@@ -1,6 +1,6 @@
 {
   "name": "dsh-memory-recall",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Persistent memory for dsh in the style of Hermes Agent: a memory tool that keeps a user profile and the model's own notes, delivered to every chat as a logged context message — at the start, after a change and after compaction — and a session_search tool that reads earlier chats only after the user approves, with a Memory panel to see and edit what is kept.",
   "icon": "assets/icon.png",
   "type": "module",

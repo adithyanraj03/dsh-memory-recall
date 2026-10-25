@@ -183,6 +183,7 @@ Prefers short answers with the command first, explanation after.
 ## 要求
 
 - dsh 0.1.5 或更高版本，带 `web` 配置档——自 0.2.1 起同样支持 dsh 0.1.7+ 和 0.2.x
+- 0.2.3 — 记忆消息在 dsh 0.2.x 上使用 v4 的 source kind
 - Node 22+
 - 无运行时依赖——客户端包只依赖 `react`
 
