@@ -127,3 +127,45 @@ test('an unknown target is refused', async () => {
   assert.equal(r.success, false);
   assert.match(r.error, /unknown target/);
 });
+
+/* ---- budgets: the panel's sliders -------------------------------------------- */
+
+test('setLimit saves to settings.json and a fresh store on the same dir reads it back', async () => {
+  const s = await fresh();
+  const out = await s.setLimit('memory', 4000);
+  assert.equal(out.success, true);
+  assert.equal(out.limits.memory, 4000);
+  assert.equal(out.overridden, true);
+  assert.match(await readFile(s.settingsPath(), 'utf8'), /"memory":\s*4000/);
+  const reopened = new MemoryStore({ dir: s.dir });
+  assert.equal(reopened.limits.memory, 4000, 'the saved budget survives a restart');
+});
+
+test('a saved budget overrides the config limits, and reset returns to them', async () => {
+  const s = await fresh({ memory: 3000 });
+  assert.equal(s.limits.memory, 3000, 'config first');
+  await s.setLimit('memory', 5000);
+  assert.equal(s.limits.memory, 5000);
+  const out = await s.resetLimits();
+  assert.equal(out.limits.memory, 3000, 'back to the config value, not the default');
+  assert.equal(out.overridden, false);
+  await assert.rejects(readFile(s.settingsPath(), 'utf8'), (e) => e.code === 'ENOENT');
+});
+
+test('setLimit refuses out-of-range, fractional, unknown and non-number budgets', async () => {
+  const s = await fresh();
+  for (const bad of [100, 99999, 2200.5, 'x', null]) {
+    assert.equal((await s.setLimit('memory', bad)).success, false, String(bad));
+  }
+  assert.equal((await s.setLimit('notes', 1000)).success, false, 'unknown target');
+  assert.equal(s.limits.memory, DEFAULT_LIMITS.memory, 'nothing changed');
+});
+
+test('a raised budget lets a write through that the old one refused', async () => {
+  const s = await fresh({ memory: 500 });
+  const long = 'x'.repeat(600);
+  assert.equal((await s.add('memory', long)).success, false, 'over the small budget');
+  await s.setLimit('memory', 700);
+  assert.equal((await s.add('memory', long)).success, true, 'fits the raised budget');
+  assert.equal(s.usage('memory').limit, 700);
+});

@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apply, inject, name } from '../src/index.js';
-import { STATE_PATH, ENTRY_PATH, RECALL_PATH } from '../src/routes.js';
+import { STATE_PATH, ENTRY_PATH, RECALL_PATH, SETTINGS_PATH } from '../src/routes.js';
 import { passThrough } from './fake-dsh.js';
 
 function host() {
@@ -161,6 +161,30 @@ test('routes: the panel reads both stores, edits them, and bad edits are refused
 
   assert.equal((await call(routes.get(ENTRY_PATH), { method: 'POST', body: { target: 'user', action: 'wipe' } })).status, 400);
   assert.equal((await call(routes.get(STATE_PATH), { method: 'POST' })).status, 405);
+});
+
+test('settings route: budgets read, set and reset; the state comes back rescaled', async () => {
+  const { routes } = await boot();
+  const route = routes.get(SETTINGS_PATH);
+  let res = await call(route, { url: SETTINGS_PATH });
+  assert.equal(res.body.limits.memory, 2200);
+  assert.equal(res.body.overridden, false);
+  assert.equal(res.body.bounds.memory.max, 10000);
+
+  res = await call(route, { method: 'POST', body: { limits: { memory: 4000 } } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.limits.memory, 4000);
+  assert.equal(res.body.overridden, true);
+  assert.equal(res.body.state.memory.usage.limit, 4000, 'the panel bars rescale from the same response');
+
+  res = await call(route, { method: 'POST', body: { limits: { memory: 999999 } } });
+  assert.equal(res.status, 400, 'out of bounds is refused');
+
+  res = await call(route, { method: 'POST', body: { reset: true } });
+  assert.equal(res.body.limits.memory, 2200);
+  assert.equal(res.body.overridden, false);
+
+  assert.equal((await call(route, { url: SETTINGS_PATH, method: 'PUT' })).status, 405);
 });
 
 test('routes: a recall record is served by call id, and an unknown one is a 404', async () => {

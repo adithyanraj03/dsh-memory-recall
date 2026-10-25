@@ -1,7 +1,9 @@
 // Host routes for the browser half, and the per-call record the recall card reads.
 //
-//   GET  /plugin-data/dsh-memory-recall/state            → both stores: entries, usage, limits
+//   GET  /plugin-data/dsh-memory-recall/state            → both stores: entries, usage, limits, budgets
 //   POST /plugin-data/dsh-memory-recall/entry            → an edit made in the Memory panel
+//   GET  /plugin-data/dsh-memory-recall/settings         → the budgets, their defaults and the slider bounds
+//   POST /plugin-data/dsh-memory-recall/settings         → a budget moved in the panel, or {reset:true}
 //   GET  /plugin-data/dsh-memory-recall/recall?callId=…  → what one session_search call did
 //   GET  /plugin-data/dsh-memory-recall/chats?session=…  → every chat, grouped by workspace, for the @ menu
 //   GET  /plugin-data/dsh-memory-recall/briefing?session=… → whether that chat's prompt has memory, and which
@@ -13,6 +15,7 @@
 export const BASE = '/plugin-data/dsh-memory-recall';
 export const STATE_PATH = `${BASE}/state`;
 export const ENTRY_PATH = `${BASE}/entry`;
+export const SETTINGS_PATH = `${BASE}/settings`;
 export const RECALL_PATH = `${BASE}/recall`;
 export const CHATS_PATH = `${BASE}/chats`;
 export const BRIEFING_PATH = `${BASE}/briefing`;
@@ -110,7 +113,7 @@ async function readBody(req) {
 export async function stateOf(store, tooling = null) {
   await store.load();
   const one = (target) => ({ entries: store.entries[target], usage: store.usage(target) });
-  return { dir: store.dir, user: one('user'), memory: one('memory'), ...(tooling ? { tools: { ...tooling } } : {}) };
+  return { dir: store.dir, user: one('user'), memory: one('memory'), budgets: store.limitsState(), ...(tooling ? { tools: { ...tooling } } : {}) };
 }
 
 /**
@@ -165,6 +168,29 @@ export function registerRoutes(webServer, { store, log, chatIndex, cwdOf, toolin
       else if (action === 'remove') result = await store.remove(target, oldText);
       else return sendJson(res, 400, { error: "action must be 'add', 'replace' or 'remove'" });
       sendJson(res, result.success ? 200 : 400, { result, state: await stateOf(store, tooling) });
+    },
+  }));
+  off.push(webServer.register({
+    kind: 'exact',
+    path: SETTINGS_PATH,
+    handler: async (req = {}, res) => {
+      const method = (req.method || 'GET').toUpperCase();
+      if (method === 'GET') return sendJson(res, 200, store.limitsState());
+      if (method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'the body must be a JSON object' });
+      if (body.reset === true) {
+        const out = await store.resetLimits();
+        return sendJson(res, out.success ? 200 : 400, { ...out, state: await stateOf(store, tooling) });
+      }
+      const limits = body.limits;
+      if (!limits || typeof limits !== 'object') return sendJson(res, 400, { error: 'the body must be {limits:{memory?,user?}} or {reset:true}' });
+      // Each target applies on its own; a later bad one does not undo an earlier good one.
+      for (const [target, value] of Object.entries(limits)) {
+        const out = await store.setLimit(target, value);
+        if (!out.success) return sendJson(res, 400, { error: out.error });
+      }
+      sendJson(res, 200, { ...store.limitsState(), state: await stateOf(store, tooling) });
     },
   }));
   off.push(webServer.register({

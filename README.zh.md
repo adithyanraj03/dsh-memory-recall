@@ -88,7 +88,7 @@ dsh plugin --profile web add /path/to/dsh-memory-recall
 - **笔记** 和 **用户档案** 两个标签页，各有一个圆环和一条进度条显示已用多少。
 - 就地**编辑**或**删除**任何条目（悬停显示），删除有内联确认。
 - 自己**添加**条目；标签页条目多了可以**搜索**。
-- **⚙ 显示设置** — 按浏览器分别开关消息框里的 🧠 按钮和 `@` 中的会话与工作区。
+- **⚙ 显示设置** — 按浏览器分别开关消息框里的 🧠 按钮和 `@` 中的会话与工作区。这里还有**预算滑块**：拖动笔记与档案的字符预算（显示约等于多少 token），随记忆文件一起保存，从会话的下一步交付起生效；重置则回到 `cordis.patch.yml` 里的 `limits`。
 - 侧边栏收起时，它缩成一个图标，和 Settings 一样。
 
 ![浅色主题下的用户档案标签页](assets/memory-panel-light.png)
@@ -132,7 +132,7 @@ Works on Windows 11 in PowerShell; projects live under D:/code.
 Prefers short answers with the command first, explanation after.
 ```
 
-预算故意很小——**笔记 2,200 字符、用户档案 1,375 字符**（Hermes 的默认值），合计约 900 token——因为它们每个会话都要付费。当某个存储满了，会溢出的保存会被整体拒绝、绝不截断；模型会看到现有条目并做一次合并——合并或丢弃过时条目并加入新条目——按最终大小校验。愿意每个会话多付一点，就用 `limits`（见下）调高预算。
+预算故意很小——**笔记 2,200 字符、用户档案 1,375 字符**（Hermes 的默认值），合计约 900 token——因为它们每个会话都要付费。当某个存储满了，会溢出的保存会被整体拒绝、绝不截断；模型会看到现有条目并做一次合并——合并或丢弃过时条目并加入新条目——按最终大小校验。用 ⚙ 显示设置里的滑块调整预算（保存在 `settings.json`，从下一步交付起生效），或若你更想在配置文件里固定，就设置 `limits`（见下）。
 
 子代理会话不会收到这条消息；它们是模型自己的工人。
 
@@ -151,7 +151,7 @@ Prefers short answers with the command first, explanation after.
 | 键 | 默认值 | 含义 |
 |---|---|---|
 | `dir` | `~/.dsh/dsh-memory-recall` | `USER.md` 和 `MEMORY.md` 的位置 |
-| `limits` | `{memory: 2200, user: 1375}` | 笔记与用户档案的字符预算 |
+| `limits` | `{memory: 2200, user: 1375}` | 笔记与用户档案的字符预算——面板滑块一旦拖动即覆盖，重置后恢复 |
 | `recall` | `true` | `false` 去掉 `session_search`，保留记忆 |
 | `askBeforeRecall` | `true` | `false` 读取早期会话不再询问 |
 
@@ -174,8 +174,9 @@ Prefers short answers with the command first, explanation after.
 - **文件**：
 
   ```
-  ~/.dsh/dsh-memory-recall/USER.md     用户档案
-  ~/.dsh/dsh-memory-recall/MEMORY.md   模型的笔记
+  ~/.dsh/dsh-memory-recall/USER.md       用户档案
+  ~/.dsh/dsh-memory-recall/MEMORY.md     模型的笔记
+  ~/.dsh/dsh-memory-recall/settings.json 预算（滑块动过之后才有）
   ```
 
   纯文本，条目之间用只含 `§` 的一行分隔——与 Hermes 相同的格式，可手读可手改。

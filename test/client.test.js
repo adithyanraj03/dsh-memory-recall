@@ -405,6 +405,15 @@ test('context row: the v4 plugin:memory kind gets the same card', () => {
   assert.match(flat(expanded), /Memory loaded/);
 });
 
+test('settings: budget sliders post to /settings and show a token estimate', () => {
+  const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
+  assert.ok(source.includes('type: "range"'), 'a real slider');
+  assert.ok(source.includes('api("/settings"'), 'posts to the settings route');
+  assert.ok(source.includes('"BUDGETS"'), 'the section is drawn');
+  assert.ok(source.includes('tokens'), 'chars are translated to about-tokens');
+  assert.ok(source.includes('Reset to the config file'), 'a way back to the patch-file limits');
+});
+
 test('context row: memory gets its own card — brain, title by reason, counts', () => {
   const Node = contextNode([]);
   const flat = (tree) => JSON.stringify(tree);

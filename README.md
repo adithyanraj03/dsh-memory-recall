@@ -88,7 +88,7 @@ It returns the chats' actual messages — nothing summarised, nothing invented �
 - **Notes** and **Profile** tabs, each with a ring and a bar showing how full it is.
 - **Edit** or **delete** any entry in place (hover it), with an inline confirm for delete.
 - **Add** an entry yourself, and **search** once a tab holds a few.
-- **⚙ Display settings** — turn the 🧠 button in the message box and the chats and workspaces in `@` on or off, per browser.
+- **⚙ Display settings** — turn the 🧠 button in the message box and the chats and workspaces in `@` on or off, per browser. There are **budget sliders** too: drag the notes and profile character budgets (≈ tokens shown), saved with the memory files and applied from the chat's next delivery; reset returns to the `limits` in `cordis.patch.yml`.
 - With the sidebar collapsed, it becomes a single icon, like Settings.
 
 ![The Profile tab in the light theme](assets/memory-panel-light.png)
@@ -132,7 +132,7 @@ Works on Windows 11 in PowerShell; projects live under D:/code.
 Prefers short answers with the command first, explanation after.
 ```
 
-The budgets are small on purpose — **2,200 characters of notes and 1,375 of profile**, Hermes's defaults, together roughly 900 tokens — because they are paid in every chat. When a store is full, a save that would overflow it is refused whole, never cut; the model is shown the entries and consolidates in one batch that merges or drops stale entries and adds the new one, checked against the final size. Raise the budgets with `limits` (below) if you would rather pay more per chat.
+The budgets are small on purpose — **2,200 characters of notes and 1,375 of profile**, Hermes's defaults, together roughly 900 tokens — because they are paid in every chat. When a store is full, a save that would overflow it is refused whole, never cut; the model is shown the entries and consolidates in one batch that merges or drops stale entries and adds the new one, checked against the final size. Move the budgets with the sliders in ⚙ Display settings (saved in `settings.json`, applied from the next delivery), or set `limits` (below) if you would rather fix them in the config file.
 
 Sub-agent sessions do not get the message; they are the model's own workers.
 
@@ -151,7 +151,7 @@ All optional, on this plugin's row in the profile's `cordis.patch.yml`:
 | Key | Default | Meaning |
 |---|---|---|
 | `dir` | `~/.dsh/dsh-memory-recall` | Where `USER.md` and `MEMORY.md` live |
-| `limits` | `{memory: 2200, user: 1375}` | Character budgets for the notes and the profile |
+| `limits` | `{memory: 2200, user: 1375}` | Character budgets for the notes and the profile — the panel's sliders override them once moved, until reset |
 | `recall` | `true` | `false` drops `session_search` and keeps memory |
 | `askBeforeRecall` | `true` | `false` reads earlier chats without asking |
 
@@ -174,8 +174,9 @@ Other guards:
 - **Files**:
 
   ```
-  ~/.dsh/dsh-memory-recall/USER.md     the user profile
-  ~/.dsh/dsh-memory-recall/MEMORY.md   the model's notes
+  ~/.dsh/dsh-memory-recall/USER.md       the user profile
+  ~/.dsh/dsh-memory-recall/MEMORY.md     the model's notes
+  ~/.dsh/dsh-memory-recall/settings.json the budgets, once a slider moves
   ```
 
   Plain text, entries separated by a line holding only `§` — the same format as Hermes, readable and editable by hand.

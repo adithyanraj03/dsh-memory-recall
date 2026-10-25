@@ -15,7 +15,7 @@
 // changes run one at a time.
 
 import { readFileSync } from 'node:fs';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { firstThreatMessage } from './threats.js';
 
@@ -29,6 +29,12 @@ export const TARGETS = {
 
 /** Hermes Agent's defaults: 2,200 characters of notes, 1,375 of user profile. */
 export const DEFAULT_LIMITS = { memory: 2200, user: 1375 };
+
+/** What the panel's budget sliders may set, in characters (≈ 4 characters per token). */
+export const LIMIT_BOUNDS = {
+  memory: { min: 500, max: 10000, step: 100 },
+  user: { min: 250, max: 5000, step: 50 },
+};
 
 /** Entries in a file's text: trimmed, blanks dropped, exact duplicates dropped. */
 export function parseEntries(raw) {
@@ -66,13 +72,74 @@ export class MemoryStore {
    */
   constructor({ dir, limits = {} }) {
     this.dir = dir;
-    this.limits = { ...DEFAULT_LIMITS, ...limits };
+    this.configLimits = { ...DEFAULT_LIMITS, ...limits };
+    this.limits = { ...this.configLimits };
     this.entries = { user: [], memory: [] };
     this.queue = Promise.resolve();
+    this.loadSettingsSync();
   }
 
   pathFor(target) {
     return join(this.dir, TARGETS[target].file);
+  }
+
+  settingsPath() {
+    return join(this.dir, 'settings.json');
+  }
+
+  /** Budgets saved from the panel's sliders; they win over the config file. */
+  loadSettingsSync() {
+    try {
+      const saved = JSON.parse(readFileSync(this.settingsPath(), 'utf8'));
+      for (const target of Object.keys(LIMIT_BOUNDS)) {
+        const value = saved?.limits?.[target];
+        if (Number.isInteger(value) && value >= LIMIT_BOUNDS[target].min && value <= LIMIT_BOUNDS[target].max) this.limits[target] = value;
+      }
+    } catch { /* no settings file yet, or unreadable: the config limits stand */ }
+  }
+
+  /** The budgets, their config-file defaults and the slider bounds — what the panel draws. */
+  limitsState() {
+    return {
+      limits: { ...this.limits },
+      configLimits: { ...this.configLimits },
+      bounds: LIMIT_BOUNDS,
+      overridden: this.limits.memory !== this.configLimits.memory || this.limits.user !== this.configLimits.user,
+    };
+  }
+
+  /** Set one budget and save it to settings.json; the panel's slider calls this. */
+  setLimit(target, value) {
+    const bounds = LIMIT_BOUNDS[target];
+    if (!bounds) return Promise.resolve({ success: false, error: `unknown budget '${target}' — use 'memory' or 'user'` });
+    if (!Number.isInteger(value)) return Promise.resolve({ success: false, error: `the ${target} budget must be a whole number of characters` });
+    if (value < bounds.min || value > bounds.max) return Promise.resolve({ success: false, error: `the ${target} budget must be between ${bounds.min.toLocaleString('en-US')} and ${bounds.max.toLocaleString('en-US')} characters` });
+    return this.serial(async () => {
+      this.limits[target] = value;
+      try {
+        await mkdir(this.dir, { recursive: true });
+        const path = this.settingsPath();
+        const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
+        await writeFile(temp, `${JSON.stringify({ limits: this.limits }, null, 2)}\n`, 'utf8');
+        await rename(temp, path);
+      } catch (error) {
+        return { success: false, error: `could not save the budget (${error?.code || error?.message || error}); it applies until dsh restarts` };
+      }
+      return { success: true, ...this.limitsState() };
+    });
+  }
+
+  /** Drop the saved budgets; the config file's limits apply again. */
+  resetLimits() {
+    return this.serial(async () => {
+      try {
+        await unlink(this.settingsPath());
+      } catch (error) {
+        if (error?.code !== 'ENOENT') return { success: false, error: `could not remove the saved budgets (${error?.code || error?.message || error})` };
+      }
+      this.limits = { ...this.configLimits };
+      return { success: true, ...this.limitsState() };
+    });
   }
 
   limit(target) {
