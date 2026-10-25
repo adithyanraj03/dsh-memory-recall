@@ -113,30 +113,62 @@ export async function apply(ctx, config = {}, deps = {}) {
     tooling.error = 'this dsh has no tool registry';
   }
 
-  // ---- each new chat: memory in its prompt, frozen for its lifetime ---
-  const briefed = new WeakSet();
+  // ---- each new chat: memory guidance in its prompt, frozen for its
+  // lifetime. dsh 0.1.7 removed `agent/session-start`; `agent/created` and
+  // `agent/disposed` exist on every dsh from 0.1.0-rc.7 through 0.2.x, so
+  // they are the seam — session-start stays wired as a back-compat path,
+  // deduped by the same map.
+  /** Agent contexts already carrying the section -> the registering fiber. */
+  const briefed = new WeakMap();
   // sessionId -> what that chat's prompt was given, for the composer chip.
   const briefings = createBriefings();
-  ctx.on?.('agent/session-start', (payload) => {
-    const agent = payload?.agent;
+
+  const installGuidance = (agent) => {
     const agentCtx = agent?.ctx;
     if (!agentCtx || briefed.has(agentCtx) || !isTopLevel(agent)) return;
-    briefed.add(agentCtx);
     try {
-      const prompt = service(agentCtx, 'systemPrompt');
-      if (typeof prompt?.section !== 'function') return;
       // Read now, once: this text is what the chat keeps, so a save made later
       // in it never rewrites its prompt (which would cost the cached prefix).
       // The guidance only: fixed text, so the cached prompt prefix holds.
       const text = renderSection(null, store.limits, { tools: tooling.ok });
-      const register = () => prompt.section({ name: SECTION_NAME, order: SECTION_ORDER, text });
-      if (typeof agentCtx.effect === 'function') agentCtx.effect(register, 'dsh-memory-recall: memory snapshot');
-      else register();
+      // `inject` rather than `get`: at agent/created the prompt service may not
+      // be resolvable yet; the callback runs once it is, and the fiber's
+      // dispose() takes the section back out.
+      const fiber = agentCtx.inject?.(['systemPrompt'], (scope) => {
+        if (!isTopLevel(agent)) return; // the header may have attached since created
+        try {
+          scope.systemPrompt?.section?.({ name: SECTION_NAME, order: SECTION_ORDER, text });
+        } catch {
+          // Already registered (e.g. after a plugin reload): a duplicate name throws.
+        }
+      });
+      if (fiber) briefed.set(agentCtx, fiber);
     } catch (error) {
-      // Losing the snapshot costs this chat its memory, never the chat.
+      // Losing the guidance costs this chat its memory, never the chat.
       ctx.logger?.warn?.(`[dsh-memory-recall] no memory for this chat: ${error?.message ?? error}`);
     }
+  };
+
+  const uninstallGuidance = (agent) => {
+    const agentCtx = agent?.ctx;
+    const fiber = agentCtx && briefed.get(agentCtx);
+    if (!fiber) return;
+    briefed.delete(agentCtx);
+    try {
+      fiber.dispose?.();
+    } catch {
+      // Teardown must not throw.
+    }
+  };
+
+  // Agents that already exist when this plugin mounts (a reload).
+  ctx.inject?.(['agents'], (scope) => {
+    for (const agent of scope.agents?.list?.() ?? []) installGuidance(agent);
   });
+  ctx.on?.('agent/created', (payload) => installGuidance(payload?.agent));
+  ctx.on?.('agent/disposed', (payload) => uninstallGuidance(payload?.agent));
+  // Older hosts fire this instead of agent/created; the map dedupes.
+  ctx.on?.('agent/session-start', (payload) => installGuidance(payload?.agent));
 
   // ---- the memory itself: a logged context message, whenever the chat
   // cannot see the current version (start, after compaction, after a change).

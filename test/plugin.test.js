@@ -11,23 +11,43 @@ function host() {
   const tools = [];
   const handlers = {};
   const routes = new Map();
+  const agents = [];
   const ctx = {
     logger: { warn() {}, info() {} },
     tools: { register: (t) => { tools.push(t); return () => {}; } },
     webServer: { register: (r) => { routes.set(r.path, r); return () => routes.delete(r.path); } },
     on: (event, fn) => { (handlers[event] ??= []).push(fn); return () => {}; },
     get: () => undefined,
+    // cordis' lazy inject: the callback runs for services the scope has. The
+    // fake answers 'agents' with the current list, once, at mount.
+    inject: (deps, cb) => {
+      if (deps.includes('agents')) cb({ agents: { list: () => agents } });
+      return { dispose() {} };
+    },
   };
-  return { ctx, tools, handlers, routes };
+  return { ctx, tools, handlers, routes, agents };
 }
 
 function agentWith(id, header = {}) {
   const sections = [];
-  const agentCtx = {
-    get: (sid) => (sid === 'systemPrompt' ? { section: (s) => sections.push(s) } : undefined),
-    effect: (fn) => fn(),
+  let disposed = false;
+  let cb = null;
+  const scope = {
+    systemPrompt: {
+      section: (s) => {
+        // dsh's prompt registry throws on a duplicate name after a reload.
+        if (sections.some((x) => x.name === s.name)) throw new Error(`duplicate section: ${s.name}`);
+        sections.push(s);
+      },
+    },
   };
-  return { agent: { id, session: { header }, ctx: agentCtx }, sections };
+  const agentCtx = {
+    inject: (deps, fn) => {
+      if (deps.includes('systemPrompt')) { cb = fn; fn(scope); }
+      return { dispose() { disposed = true; sections.length = 0; } };
+    },
+  };
+  return { agent: { id, session: { header }, ctx: agentCtx }, sections, isDisposed: () => disposed, rerun: () => cb?.(scope) };
 }
 
 async function call(route, { method = 'GET', url = route.path, body } = {}) {
@@ -66,6 +86,54 @@ test('a chat is briefed once; sub-agents are not briefed', async () => {
   const sub = agentWith('sub', { parentSession: 'c', origin: 'subagent' });
   start({ agent: sub.agent });
   assert.equal(sub.sections.length, 0);
+});
+
+test('guidance registers on agent/created; session-start does not double-register; disposal removes it', async () => {
+  const { handlers } = await boot();
+  const chat = agentWith('c');
+  handlers['agent/created'][0]({ agent: chat.agent });
+  assert.equal(chat.sections.length, 1, 'registered on created');
+  handlers['agent/session-start'][0]({ agent: chat.agent });
+  assert.equal(chat.sections.length, 1, 'the back-compat path is deduped by the map');
+  handlers['agent/disposed'][0]({ agent: chat.agent });
+  assert.equal(chat.sections.length, 0, 'disposal removes the section');
+  assert.equal(chat.isDisposed(), true, 'the fiber was disposed');
+});
+
+test('a sub-agent gets no guidance on the created path', async () => {
+  const { handlers } = await boot();
+  const sub = agentWith('sub', { parentSession: 'c', origin: 'subagent' });
+  handlers['agent/created'][0]({ agent: sub.agent });
+  assert.equal(sub.sections.length, 0);
+});
+
+test('agents already live when the plugin mounts get the guidance', async () => {
+  const h = host();
+  const existing = agentWith('pre');
+  h.agents.push(existing.agent);
+  await apply(h.ctx, { dir: await mkdtemp(join(tmpdir(), 'mem-pre-')) }, { defineTool: passThrough });
+  assert.equal(existing.sections.length, 1);
+});
+
+test('a re-run of the registration (duplicate name) is swallowed, not thrown', async () => {
+  const { handlers } = await boot();
+  const chat = agentWith('c');
+  handlers['agent/created'][0]({ agent: chat.agent });
+  assert.doesNotThrow(() => chat.rerun());
+  assert.equal(chat.sections.length, 1);
+});
+
+test('a sub-agent whose header attaches after created still gets no guidance', async () => {
+  const { handlers } = await boot();
+  const sections = [];
+  let cb = null;
+  const scope = { systemPrompt: { section: (s) => sections.push(s) } };
+  const agent = { id: 'late', session: { header: {} }, ctx: { inject: (deps, fn) => { if (deps.includes('systemPrompt')) cb = fn; return { dispose() {} }; } } };
+  handlers['agent/created'][0]({ agent });
+  assert.ok(cb, 'registration waits for the prompt service');
+  agent.session.header = { parentSession: 'p', origin: 'subagent' };
+  cb(scope);
+  assert.equal(sections.length, 0, 'top-level is re-checked when the service resolves');
 });
 
 test('routes: the panel reads both stores, edits them, and bad edits are refused', async () => {

@@ -64,7 +64,7 @@ async function bootWithoutTools() {
   };
   const dir = mkdtempSync(join(tmpdir(), 'mem-notools-'));
   await apply(ctx, { dir }, { loadDefineTool: () => importFails() });
-  const agentCtx = { get: (id) => (id === 'systemPrompt' ? { section: (s) => sections.push(s) } : undefined), effect: (fn) => fn() };
+  const agentCtx = { inject: (deps, cb) => { if (deps.includes('systemPrompt')) cb({ systemPrompt: { section: (s) => sections.push(s) } }); return { dispose() {} }; } };
   handlers['agent/session-start'][0]({ agent: { id: 'c', session: { header: {} }, ctx: agentCtx } });
   return { sections, routes };
 }

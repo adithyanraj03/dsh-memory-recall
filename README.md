@@ -173,7 +173,7 @@ Other guards:
 
 ## Requirements
 
-- dsh 0.1.5 or later, with a `web` profile
+- dsh 0.1.5 or later, with a `web` profile — from 0.2.1 also dsh 0.1.7+ and 0.2.x
 - Node 22+
 - No runtime dependencies — the client bundle requires only `react`
 
