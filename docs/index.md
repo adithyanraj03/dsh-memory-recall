@@ -70,7 +70,7 @@ The 🧠 button in the message box is lit when this chat has memory, dim when it
 
 ![The Memory panel with the model's notes, a budget bar and inline edit](assets/memory-panel.png)
 
-Everything kept, in two tabs — **Notes** and **Profile** — each with a ring and a bar showing how much of the budget is used. Edit or delete any entry in place (hover shows the actions), add your own, and search once a tab holds a few. **⚙ Display settings** toggle the 🧠 button and the `@` rows per browser. With the sidebar collapsed it becomes a single icon, like Settings.
+Everything kept, in two tabs — **Notes** and **Profile** — each with a ring and a bar showing how much of the budget is used. Edit or delete any entry in place (hover shows the actions), add your own, and search once a tab holds a few. **⚙ Display settings** toggle the 🧠 button and the `@` rows per browser — and carry the **budget sliders**: drag the notes and profile character budgets (≈ tokens shown), saved with the memory files and applied from the chat's next delivery; reset returns to the `limits` in `cordis.patch.yml`. With the sidebar collapsed it becomes a single icon, like Settings.
 
 ![The Profile tab in the light theme](assets/memory-panel-light.png)
 
@@ -109,7 +109,7 @@ On the plugin's row in your profile's `cordis.patch.yml` — all optional:
 - id: dsh-memory-recall
   config:
     dir: '/path/to/store'     # where USER.md and MEMORY.md live (default ~/.dsh/dsh-memory-recall)
-    limits:                   # character budgets (defaults are Hermes's)
+    limits:                   # character budgets (Hermes's defaults); the panel's sliders override them once moved, until reset
       memory: 2200
       user: 1375
     recall: false             # drop session_search, keep memory
@@ -122,7 +122,7 @@ An override replaces the row's whole config, so re-write every key you set. Rest
 
 ## Privacy
 
-No telemetry, no network. Memory is plain text in `~/.dsh/dsh-memory-recall/` (`USER.md`, `MEMORY.md`), entries separated by a `§` line — Hermes's format, readable and editable by hand. Writes the model makes are scanned with Hermes Agent's threat patterns and refused with the reason; manual edits and panel edits are never scanned.
+No telemetry, no network. Memory is plain text in `~/.dsh/dsh-memory-recall/` (`USER.md`, `MEMORY.md`, and `settings.json` once a slider moves), entries separated by a `§` line — Hermes's format, readable and editable by hand. Writes the model makes are scanned with Hermes Agent's threat patterns and refused with the reason; manual edits and panel edits are never scanned.
 
 ---
 
